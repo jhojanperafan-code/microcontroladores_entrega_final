@@ -1,0 +1,179 @@
+#include "wokwi-api.h"
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+
+typedef struct {
+  uint8_t registers[256];
+  uint8_t register_pointer;
+  bool waiting_for_register;
+} chip_state_t;
+
+
+// Guarda un valor de 16 bits en formato little-endian
+static void set_u16_le(
+  chip_state_t *chip,
+  uint8_t address,
+  uint16_t value
+) {
+  chip->registers[address] = value & 0xFF;
+  chip->registers[address + 1] = value >> 8;
+}
+
+
+// Guarda una medición de 20 bits en tres registros
+static void set_raw_20bit(
+  chip_state_t *chip,
+  uint8_t address,
+  uint32_t value
+) {
+  chip->registers[address] = (value >> 12) & 0xFF;
+  chip->registers[address + 1] = (value >> 4) & 0xFF;
+  chip->registers[address + 2] = (value & 0x0F) << 4;
+}
+
+
+// Se ejecuta cuando la ESP32 inicia una comunicación I2C
+static bool on_i2c_connect(
+  void *user_data,
+  uint32_t address,
+  bool read
+) {
+  chip_state_t *chip = (chip_state_t *)user_data;
+
+  if (!read) {
+    chip->waiting_for_register = true;
+  }
+
+  return true;
+}
+
+
+// Recibe datos enviados por la ESP32
+static bool on_i2c_write(
+  void *user_data,
+  uint8_t data
+) {
+  chip_state_t *chip = (chip_state_t *)user_data;
+
+  if (chip->waiting_for_register) {
+    chip->register_pointer = data;
+    chip->waiting_for_register = false;
+  } else {
+    chip->registers[chip->register_pointer] = data;
+    chip->register_pointer++;
+  }
+
+  return true;
+}
+
+
+// Envía un dato hacia la ESP32
+static uint8_t on_i2c_read(
+  void *user_data
+) {
+  chip_state_t *chip = (chip_state_t *)user_data;
+
+  uint8_t value =
+    chip->registers[chip->register_pointer];
+
+  chip->register_pointer++;
+
+  return value;
+}
+
+
+static void on_i2c_disconnect(
+  void *user_data
+) {
+  // No es necesario realizar ninguna acción
+}
+
+
+void chip_init(void) {
+
+  chip_state_t *chip =
+    calloc(1, sizeof(chip_state_t));
+
+  chip->waiting_for_register = true;
+
+  // ==========================================
+  // IDENTIFICACIÓN DEL BMP280
+  // ==========================================
+
+  // Registro ID del sensor
+  chip->registers[0xD0] = 0x58;
+
+  // Registro de estado
+  chip->registers[0xF3] = 0x00;
+
+  // Configuración inicial
+  chip->registers[0xF4] = 0x00;
+  chip->registers[0xF5] = 0x00;
+
+
+  // ==========================================
+  // COEFICIENTES DE CALIBRACIÓN
+  // ==========================================
+
+  set_u16_le(chip, 0x88, 27504);
+  set_u16_le(chip, 0x8A, 26435);
+  set_u16_le(chip, 0x8C, (uint16_t)-1000);
+
+  set_u16_le(chip, 0x8E, 36477);
+  set_u16_le(chip, 0x90, (uint16_t)-10685);
+  set_u16_le(chip, 0x92, 3024);
+  set_u16_le(chip, 0x94, 2855);
+  set_u16_le(chip, 0x96, 140);
+  set_u16_le(chip, 0x98, (uint16_t)-7);
+  set_u16_le(chip, 0x9A, 15500);
+  set_u16_le(chip, 0x9C, (uint16_t)-14600);
+  set_u16_le(chip, 0x9E, 6000);
+
+
+  // ==========================================
+  // VALORES SIMULADOS
+  // ==========================================
+
+  // Presión aproximada: 100653 Pa
+  uint32_t raw_pressure = 415148;
+
+  // Temperatura aproximada: 25.08 °C
+  uint32_t raw_temperature = 519888;
+
+  set_raw_20bit(
+    chip,
+    0xF7,
+    raw_pressure
+  );
+
+  set_raw_20bit(
+    chip,
+    0xFA,
+    raw_temperature
+  );
+
+
+  // ==========================================
+  // CONFIGURACIÓN I2C
+  // ==========================================
+
+  const i2c_config_t i2c_config = {
+    .user_data = chip,
+    .address = 0x76,
+    .scl = pin_init("SCL", INPUT_PULLUP),
+    .sda = pin_init("SDA", INPUT_PULLUP),
+    .connect = on_i2c_connect,
+    .read = on_i2c_read,
+    .write = on_i2c_write,
+    .disconnect = on_i2c_disconnect
+  };
+
+  i2c_init(&i2c_config);
+
+  printf(
+    "BMP280 virtual iniciado en direccion 0x76\n"
+  );
+}
