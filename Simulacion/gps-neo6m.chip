@@ -1,0 +1,65 @@
+#include "wokwi-api.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define HALF_SECOND 500000
+#define LEN(arr) ((int)(sizeof(arr) / sizeof(arr[0])))
+
+// Datos GPS NMEA simulados
+const char gps_data[][100] = {
+  "$GPGGA,120000.00,0226.6880,N,07636.8820,W,1,08,0.9,1760.0,M,0.0,M,,*7A\r\n",
+  "$GPRMC,120000.00,A,0226.6880,N,07636.8820,W,0.5,90.0,080626,,,A*7F\r\n",
+  "$GPGGA,120001.00,0226.6882,N,07636.8818,W,1,08,0.9,1760.2,M,0.0,M,,*70\r\n",
+  "$GPRMC,120001.00,A,0226.6882,N,07636.8818,W,0.6,92.0,080626,,,A*76\r\n"
+};
+
+typedef struct {
+  uart_dev_t uart;
+  uint32_t message_index;
+} chip_state_t;
+
+static void gps_timer_event(void *user_data) {
+  chip_state_t *chip = (chip_state_t *)user_data;
+
+  const char *message = gps_data[chip->message_index];
+
+  uart_write(
+    chip->uart,
+    (uint8_t *)message,
+    strlen(message)
+  );
+
+  chip->message_index++;
+
+  if (chip->message_index >= LEN(gps_data)) {
+    chip->message_index = 0;
+  }
+}
+
+void chip_init(void) {
+  chip_state_t *chip = malloc(sizeof(chip_state_t));
+
+  const uart_config_t uart_config = {
+    .tx = pin_init("TX", INPUT_PULLUP),
+    .rx = pin_init("RX", INPUT),
+    .baud_rate = 9600,
+    .rx_data = NULL,
+    .write_done = NULL,
+    .user_data = chip
+  };
+
+  chip->uart = uart_init(&uart_config);
+  chip->message_index = 0;
+
+  const timer_config_t timer_config = {
+    .callback = gps_timer_event,
+    .user_data = chip
+  };
+
+  timer_t timer = timer_init(&timer_config);
+
+  timer_start(timer, HALF_SECOND, true);
+
+  printf("GPS NEO-6M inicializado correctamente\n");
+}
