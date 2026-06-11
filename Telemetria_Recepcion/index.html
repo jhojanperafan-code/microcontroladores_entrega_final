@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Telemetría Cohete - Misión Control</title>
+    <!-- <script src="https://code.highcharts.com/highcharts.js"></script> -->
+    <script src="/highcharts.js"></script>
+    <style>
+        body { 
+            font-family: sans-serif; 
+            background: #1a1a1a; 
+            color: white; 
+            text-align: center;
+        }
+
+        .grid { 
+            display: grid; 
+            grid-template-columns: 1fr 1fr; 
+            gap: 20px; 
+            padding: 20px; 
+        }
+
+        .chart-container { 
+            background: #2d2d2d; 
+            border-radius: 8px; 
+            padding: 10px; 
+        }
+    </style>
+</head>
+<body>
+    <h1>CENTRO DE CONTROL - TELEMETRÍA ESP32</h1>
+    <div id="status">Desconectado</div>
+
+    <div class="grid">
+        <div id="grafica-acel" class="chart-container"></div>
+        <div id="grafica-alt" class="chart-container"></div>
+        <div id="grafica-temp" class="chart-container"></div>
+        <div id="grafica-baro" class="chart-container"></div>
+    </div>
+
+    <script>
+        function crearGrafica(id, titulo, unidad, color) {
+            return new Highcharts.Chart({
+                chart: { 
+                    renderTo: id, 
+                    type: 'spline', 
+                    backgroundColor: '#2d2d2d' 
+                },
+                title: { 
+                    text: titulo, 
+                    style: { color: '#fff' } 
+                },
+                series: [{ 
+                    name: titulo, 
+                    data: [], 
+                    color: color 
+                }],
+                plotOptions: { 
+                    spline: { 
+                        marker: { enabled: false } 
+                    } 
+                },
+                xAxis: { 
+                    type: 'datetime' 
+                },
+                yAxis: { 
+                    title: { text: unidad } 
+                }
+            });
+        }
+
+        const chartAcel = crearGrafica('grafica-acel', 'Aceleración', 'G', '#ff4d4d');
+        const chartAlt = crearGrafica('grafica-alt', 'Altura', 'Metros', '#4da6ff');
+        const chartTemp = crearGrafica('grafica-temp', 'Temperatura', '°C', '#ffcc00');
+        const chartBaro = crearGrafica('grafica-baro', 'Presión', 'hPa', '#00ff99');
+
+        const gateway = `ws://${window.location.hostname}/ws`;
+        let websocket = new WebSocket(gateway);
+
+        websocket.onopen = () => { 
+            document.getElementById('status').innerText = 'CONECTADO'; 
+        };
+
+        websocket.onclose = () => {
+            document.getElementById('status').innerText = 'DESCONECTADO';
+        };
+
+        websocket.onerror = () => {
+            document.getElementById('status').innerText = 'ERROR DE CONEXIÓN';
+        };
+
+        websocket.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            const x = (new Date()).getTime();
+            
+            chartAcel.series[0].addPoint([x, data.acel], true, chartAcel.series[0].data.length > 20);
+            chartAlt.series[0].addPoint([x, data.alt], true, chartAlt.series[0].data.length > 20);
+            chartTemp.series[0].addPoint([x, data.temp], true, chartTemp.series[0].data.length > 20);
+            chartBaro.series[0].addPoint([x, data.baro], true, chartBaro.series[0].data.length > 20);
+        };
+    </script>
+</body>
+</html>
