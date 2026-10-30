@@ -21,44 +21,48 @@ Representar el flujo desde `POST /packets` hasta la respuesta con la ruta y traz
 
 ### 2.2 Diagrama
 
+**Diagrama visual:**
+
+![Diagrama de secuencia 1: reenvío exitoso de un paquete](diagrams/03-secuencia-1-reenvio-exitoso.png)
+
+<details>
+<summary>Ver código Mermaid editable</summary>
+
 ```mermaid
 sequenceDiagram
+    hide footbox
     autonumber
-    actor Client as Cliente
-    participant PAC as PacketAPIController
-    participant PV as PacketView
-    participant FS as ForwardingService
-    participant HC as ControllerHTTPClient
-    participant RAC as RouteAPIController
-    participant RV as RouteView
-    participant RS as RoutingService
-    participant TD as TopologyDAO
-    participant BF as BellmanFordEngine
-    participant LD as ForwardingLogDAO
+    actor U as Cliente
+    participant RAPI as Router API
+    participant FWD as Forwarding Service
+    participant HTTP as HTTP Client
+    participant CAPI as Controller API
+    participant ROUTE as Routing Service
+    participant TDAO as Topology DAO
+    participant BF as Bellman-Ford
+    participant LOG as Forwarding Log DAO
 
-    Client->>PAC: POST /packets (PacketRequest)
-    PAC->>PV: validate_request(body)
-    PV-->>PAC: Packet validado
-    PAC->>FS: forward(packet)
-    FS->>HC: get_route(src,dst,metric)
-    HC->>RAC: GET /route?src=A&dst=D&metric=delay
-    RAC->>RV: validate_query(params)
-    RV-->>RAC: Consulta válida
-    RAC->>RS: calculate_route(A,D,delay)
-    RS->>TD: get_snapshot()
-    TD-->>RS: Topology + version
-    RS->>BF: calculate(graph,A,D,delay)
-    Note over BF: Bellman-Ford relaja aristas y detecta<br/>ciclos negativos alcanzables
-    BF-->>RS: Camino mínimo y costo
-    RS-->>RAC: Route
-    RAC-->>HC: HTTP 200 + RouteResponse
-    HC-->>FS: Ruta del Controller
-    Note over FS: Simula los saltos de la ruta recibida;<br/>no calcula ni modifica el camino
-    FS->>LD: append_result(ForwardingResult)
-    LD-->>FS: Registro confirmado
-    FS-->>PAC: Resultado y traza
-    PAC-->>Client: HTTP 200 + PacketResponse
+    U->>RAPI: POST /packets
+    RAPI->>FWD: forward(packet)
+    FWD->>HTTP: get_route(src,dst,metric)
+    HTTP->>CAPI: GET /route
+    CAPI->>ROUTE: calculate_route(src,dst,metric)
+    ROUTE->>TDAO: get_snapshot()
+    TDAO-->>ROUTE: Topology y version
+    ROUTE->>BF: calculate(graph,src,dst,metric)
+    Note over BF: Calcula camino minimo y costo
+    BF-->>ROUTE: Ruta y costo
+    ROUTE-->>CAPI: Route
+    CAPI-->>HTTP: HTTP 200 RouteResponse
+    HTTP-->>FWD: Ruta seleccionada
+    Note over FWD: Simula los saltos recibidos; no recalcula
+    FWD->>LOG: append_result(result)
+    LOG-->>FWD: Registro confirmado
+    FWD-->>RAPI: Resultado y traza
+    RAPI-->>U: HTTP 200 PacketResponse
 ```
+
+</details>
 
 ### 2.3 Descripción del flujo
 
@@ -86,77 +90,70 @@ Mostrar que un enlace deshabilitado queda excluido de consultas posteriores y qu
 
 ### 3.2 Diagrama
 
+**Diagrama visual:**
+
+![Diagrama de secuencia 2: fallo y recuperación de un enlace](diagrams/03-secuencia-2-fallo-restauracion.png)
+
+<details>
+<summary>Ver código Mermaid editable</summary>
+
 ```mermaid
 sequenceDiagram
+    hide footbox
     autonumber
-    actor Admin as Administrador
-    actor Client as Cliente
-    participant LAC as LinkAPIController
-    participant LMS as LinkManagementService
-    participant TD as TopologyDAO
-    participant PAC as PacketAPIController
-    participant FS as ForwardingService
-    participant HC as ControllerHTTPClient
-    participant RAC as RouteAPIController
-    participant RS as RoutingService
-    participant BF as BellmanFordEngine
-    participant LD as ForwardingLogDAO
+    actor ADM as Administrador
+    actor U as Cliente
+    participant LAPI as Link API
+    participant LMS as Link Service
+    participant TDAO as Topology DAO
+    participant RAPI as Route API
+    participant ROUTE as Routing Service
+    participant BF as Bellman-Ford
 
-    Admin->>LAC: POST /links/fail {link_id: L2}
-    LAC->>LMS: fail_link(L2)
-    LMS->>TD: get_snapshot()
-    TD-->>LMS: Topología actual + versión
-    Note over LMS: enabled=false; incrementar versión<br/>solo si el estado cambió
-    LMS->>TD: save_topology(topology)
-    TD-->>LMS: Persistencia confirmada
-    LMS-->>LAC: LinkStateResponse
-    LAC-->>Admin: HTTP 200
+    ADM->>LAPI: POST /links/fail
+    LAPI->>LMS: fail_link(link_id)
+    LMS->>TDAO: get_snapshot()
+    TDAO-->>LMS: Topologia actual
+    Note over LMS: Deshabilita el enlace y aumenta version
+    LMS->>TDAO: save_topology(topology)
+    TDAO-->>LMS: Persistencia confirmada
+    LMS-->>LAPI: LinkStateResponse
+    LAPI-->>ADM: HTTP 200
 
-    Client->>PAC: POST /packets
-    PAC->>FS: forward(packet)
-    FS->>HC: get_route(src,dst,metric)
-    HC->>RAC: GET /route
-    RAC->>RS: calculate_route(src,dst,metric)
-    RS->>TD: get_snapshot()
-    TD-->>RS: Topología con L2 deshabilitado
-    RS->>BF: calculate(graph,src,dst,metric)
-    BF-->>RS: Ruta alternativa o PathNotFound
+    U->>RAPI: GET /route
+    RAPI->>ROUTE: calculate_route(src,dst,metric)
+    ROUTE->>TDAO: get_snapshot()
+    TDAO-->>ROUTE: Topologia con enlace deshabilitado
+    ROUTE->>BF: calculate(graph,src,dst,metric)
+    BF-->>ROUTE: Ruta alternativa o sin camino
     alt Existe ruta alternativa
-        RS-->>RAC: Route alternativa
-        RAC-->>HC: HTTP 200 + RouteResponse
-        HC-->>FS: Ruta alternativa
-        FS->>LD: append_result(FORWARDED)
-        LD-->>FS: Registro confirmado
-        FS-->>PAC: Resultado con ruta alternativa
-        PAC-->>Client: HTTP 200 + FORWARDED
-    else No existe ruta alternativa
-        RS-->>RAC: PathNotFound
-        RAC-->>HC: HTTP 404 + PATH_NOT_FOUND
-        HC-->>FS: Error de camino inexistente
-        FS->>LD: append_result(DROPPED)
-        LD-->>FS: Registro confirmado
-        FS-->>PAC: Resultado sin ruta
-        PAC-->>Client: HTTP 404 + PATH_NOT_FOUND
+        ROUTE-->>RAPI: Route alternativa
+        RAPI-->>U: HTTP 200 RouteResponse
+    else No existe ruta
+        ROUTE-->>RAPI: PATH_NOT_FOUND
+        RAPI-->>U: HTTP 404 PATH_NOT_FOUND
     end
 
-    Admin->>LAC: POST /links/restore {link_id: L2}
-    LAC->>LMS: restore_link(L2)
-    LMS->>TD: get_snapshot()
-    TD-->>LMS: Topología actual + versión
-    Note over LMS: enabled=true; incrementar versión<br/>solo si el estado cambió
-    LMS->>TD: save_topology(topology)
-    TD-->>LMS: Persistencia confirmada
-    LMS-->>LAC: LinkStateResponse
-    LAC-->>Admin: HTTP 200
-    Client->>RAC: GET /route?src=A&dst=D&metric=delay
-    RAC->>RS: calculate_route(A,D,delay)
-    RS->>TD: get_snapshot()
-    TD-->>RS: Topología con L2 restaurado
-    RS->>BF: calculate(graph,A,D,delay)
-    BF-->>RS: Ruta actualizada
-    RS-->>RAC: Route
-    RAC-->>Client: HTTP 200 + RouteResponse
+    ADM->>LAPI: POST /links/restore
+    LAPI->>LMS: restore_link(link_id)
+    LMS->>TDAO: get_snapshot()
+    TDAO-->>LMS: Topologia actual
+    Note over LMS: Restaura el enlace y aumenta version
+    LMS->>TDAO: save_topology(topology)
+    TDAO-->>LMS: Persistencia confirmada
+    LMS-->>LAPI: LinkStateResponse
+    LAPI-->>ADM: HTTP 200
+    U->>RAPI: GET /route nuevamente
+    RAPI->>ROUTE: calculate_route(src,dst,metric)
+    ROUTE->>TDAO: get_snapshot()
+    TDAO-->>ROUTE: Topologia con enlace restaurado
+    ROUTE->>BF: calculate(graph,src,dst,metric)
+    BF-->>ROUTE: Ruta actualizada
+    ROUTE-->>RAPI: Route
+    RAPI-->>U: HTTP 200 RouteResponse
 ```
+
+</details>
 
 ### 3.3 Descripción del flujo
 
@@ -184,30 +181,40 @@ Mostrar el comportamiento del Router ante error de conexión o timeout. Particip
 
 ### 4.2 Diagrama
 
+**Diagrama visual:**
+
+![Diagrama de secuencia 3: Controller no disponible](diagrams/03-secuencia-3-controller-no-disponible.png)
+
+<details>
+<summary>Ver código Mermaid editable</summary>
+
 ```mermaid
 sequenceDiagram
+    hide footbox
     autonumber
-    actor Client as Cliente
-    participant PAC as PacketAPIController
-    participant FS as ForwardingService
-    participant HC as ControllerHTTPClient
-    participant LD as ForwardingLogDAO
+    actor U as Cliente
+    participant RAPI as Router API
+    participant FWD as Forwarding Service
+    participant HTTP as HTTP Client
+    participant LOG as Forwarding Log DAO
 
-    Client->>PAC: POST /packets
-    PAC->>FS: forward(packet)
-    FS->>HC: get_route(src,dst,metric)
-    HC->>HC: Solicitud HTTP con timeout de 2 s
-    alt Error de conexión
-        HC-->>FS: ControllerUnavailable
-    else Timeout
-        HC-->>FS: ControllerTimeout
+    U->>RAPI: POST /packets
+    RAPI->>FWD: forward(packet)
+    FWD->>HTTP: GET /route
+    Note over HTTP: Controller no responde
+    alt Error de conexion
+        HTTP-->>FWD: Connection error
+    else Tiempo de espera agotado
+        HTTP-->>FWD: Timeout 2 segundos
     end
-    Note over FS: No calcula ruta localmente;<br/>construye resultado FAILED
-    FS->>LD: append_result(ForwardingResult FAILED)
-    LD-->>FS: Registro confirmado
-    FS-->>PAC: ControllerUnavailable
-    PAC-->>Client: HTTP 503 + CONTROLLER_UNAVAILABLE
+    Note over FWD: No calcula la ruta localmente
+    FWD->>LOG: append_result(FAILED)
+    LOG-->>FWD: Registro confirmado
+    FWD-->>RAPI: ControllerUnavailable
+    RAPI-->>U: HTTP 503 CONTROLLER_UNAVAILABLE
 ```
+
+</details>
 
 ### 4.3 Descripción del flujo
 
